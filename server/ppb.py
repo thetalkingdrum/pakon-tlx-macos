@@ -123,6 +123,16 @@ def decode(pkt, resp=None):
         s = f"READ  {an} {rn} x{count}"
         if resp:
             s += f"  -> {resp.hex()}"
+            if (an, reg) == ("PICL", 0x88) and len(resp) >= 8:
+                # Two live bytes in an otherwise-undocumented register, split out
+                # because they behave nothing alike: resp[4] jumps ~10 counts the
+                # instant the lamp/IR turns on and decays back to a tight baseline
+                # over ~20s (a fast transient); resp[6] climbs ~linearly for the
+                # whole scan and keeps climbing for minutes after LAMP OFF (a slow
+                # thermal-mass signature). Neither meaning is confirmed -- no
+                # vendor spec, no ground truth -- these are working labels for
+                # what the two bytes DO, not a decoded spec.
+                s += f"  [transient={resp[4]} drift={resp[6]}]"
         return s
     if t == 2:                                        # WRITE
         extra = ""
@@ -184,6 +194,9 @@ def selftest():
     assert "rate=0x0613" in decode(bytes([2, 5, 0x24, 2, 0xA5, 0x13, 0x06]))
     assert "integration=0x0ffd" in decode(bytes([2, 6, 0x24, 3, 0x82, 6, 0xFD, 0x0F]))
     assert "TRIGGER" in decode(bytes([2, 6, 0x20, 3, 0x91, 0x10, 0x00, 0x01]))
+    assert "[transient=130 drift=133]" in decode(
+        bytes([1, 5, 0x20, 4, 0x88]),
+        bytes([0x01, 0x06, 0x40, 0x08, 0x82, 0x02, 0x85, 0x01]))
     assert decode(bytes([3, 1, 0x10])).startswith("POLL HOST")
     assert "MOTOR" in decode(bytes([4, 3, 0x24, 0, 0xA0]))
     assert "EEPROM read @0x0008" in decode_vendor(
