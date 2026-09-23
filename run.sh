@@ -11,6 +11,8 @@
 #         ./run.sh install  ONE COMMAND: prerequisites, OEM stack, firmware,
 #                           build, patch, registry -- everything but the scanner
 #         ./run.sh doctor   check prerequisites; --install to fix them
+#         ./run.sh make-app [dir]   build a double-clickable "Pakon Scanner.app"
+#                           (default ~/Applications) that does all of this
 #         ./run.sh import-reg <file.reg>   import a .reg using a macOS path
 #         ./run.sh stop     stop both
 #         ./run.sh log      tail both logs
@@ -118,6 +120,24 @@ import-reg)
     ;;
 doctor)
     exec "$HERE/setup/bootstrap.sh" "${2:-}"
+    ;;
+make-app)
+    # A double-clickable "Pakon Scanner.app" that runs this script with no
+    # Terminal, shows problems as dialogs, and stops the server when the client
+    # closes.  It remembers where this repo is, so re-run this if you move it.
+    dest="${2:-$HOME/Applications}"
+    app="$dest/Pakon Scanner.app"
+    command -v osacompile >/dev/null || { echo "osacompile not found"; exit 1; }
+    mkdir -p "$dest" || exit 1
+    rm -rf "$app"
+    # -s: stay open, so it can notice the client window closing.
+    osacompile -s -o "$app" "$HERE/setup/launcher.applescript" || exit 1
+    printf '%s' "$HERE" > "$app/Contents/Resources/repo-path"
+    # osacompile ad-hoc signs the bundle; re-sign after adding repo-path.
+    codesign --force --sign - "$app" >/dev/null 2>&1 || true
+    echo "built: $app"
+    echo "Double-click it (or drag it to the Dock) instead of running ./run.sh."
+    exit 0
     ;;
 stop)
     pkill -f TLXClientDemo 2>/dev/null
@@ -246,10 +266,16 @@ if ! pgrep -f pakonusb.py >/dev/null; then
         # both ignore it, since the disposition is inherited.
         ( cd "$HERE/server" && nohup sh -c \
             '"$1" -u pakonusb.py 2>&1 | tee "$2" > "$3"' \
-            _ "${PYTHON:-python3}" "$SRVLOG_KEEP" "$SRVLOG" < /dev/null & )
+            _ "${PYTHON:-python3}" "$SRVLOG_KEEP" "$SRVLOG" < /dev/null & ) \
+            > /dev/null 2>&1
     else
-        ( cd "$HERE/server" && nohup "${PYTHON:-python3}" -u pakonusb.py > "$SRVLOG" 2>&1 < /dev/null & )
+        ( cd "$HERE/server" && nohup "${PYTHON:-python3}" -u pakonusb.py > "$SRVLOG" 2>&1 < /dev/null & ) \
+            > /dev/null 2>&1
     fi
+    # (The outer redirects matter: `cd && nohup ... &` backgrounds a subshell
+    # that lives as long as the server and would otherwise hold run.sh's own
+    # stdout open, so anything reading it -- `./run.sh | tail`, a launcher --
+    # waits until the server is stopped.)
     # A cold scanner gets its firmware uploaded first, and re-enumeration after
     # that takes several seconds, so wait for "serving" rather than a fixed sleep.
     for _ in $(seq 1 30); do
