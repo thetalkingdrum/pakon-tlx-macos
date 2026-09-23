@@ -20,7 +20,7 @@ printed as a bare register number rather than invented.
 PICM_CANDIDATES = (0x24, 0x26, 0x44, 0x46)      # what TLB pings while probing
 # ...but only two of those are the running APPLICATION.  0x26/0x46 (and their
 # PICL partners 0x22/0x42) are the PICs' BOOTLOADER addresses, which is also why
-# they must never be written to -- see BOOTLOADER_ADDRS in pakonusb.py.  Latching
+# they must never be written to -- see guard_bootloader in pakonusb.py.  Latching
 # the operational pair onto a bootloader address would silently point lamp-off
 # and motor-stop at something that answers nothing on a running unit.
 PICM_APPLICATION = (0x24, 0x44)

@@ -265,9 +265,13 @@ All of this is the OEM software's behaviour, not this project's.
 - **Don't flash the PICs.** The bootloader that can erase PIC flash is reachable
   over this same command channel — a type-4 packet to `0x46` with the right bits
   is a 64-byte row erase, and one real unit lost a row of its motor firmware that
-  way. The server logs any write to `0x22`/`0x26`/`0x42`/`0x46` but does not
-  block it, because TLB probes those addresses at start-up. The 8051 application
-  firmware is in RAM and can't be bricked; the PICs can.
+  way. TLB itself carries a PIC firmware updater, which Kodak's PSI offers to run
+  at every start, so the server refuses both ways in: the bootloader-entry
+  sequence (a WRITE of reg `0x0A` = `00 55`, then type-4 command `0x01`/`0x0D`,
+  to PICL/PICM), and anything but the type-4 probe ping (command `0x00`) sent to
+  `0x22`/`0x26`/`0x42`/`0x46`. None of that occurs in ordinary scanning, and TLB's
+  controller probe still passes. The 8051 application firmware is in RAM and
+  can't be bricked; the PICs can.
 
 ---
 

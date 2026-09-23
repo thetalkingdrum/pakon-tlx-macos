@@ -116,11 +116,22 @@ LAMP_REG = 0x80             # PICL: bit0 visible, bit1 IR (docs/PROTOCOL.md)
 # chip that can erase or write flash, and it is reachable over THIS command
 # channel -- a type-4 packet to 0x46 with the right command bits is a 64-byte
 # flash row erase.  That is how a real unit lost a row of its motor controller's
-# firmware.  TLB pings these while probing for the controller pair, so reads and
-# polls pass; writes never do.  This is what makes "do not flash the PICs" a
-# guarantee rather than a note in a README.
+# firmware.  This is what makes "do not flash the PICs" a guarantee rather than
+# a note in a README -- see guard_bootloader for exactly what is refused.
 BOOTLOADER_ADDRS = (0x22, 0x26, 0x42, 0x46)
+PIC_APPLICATION_ADDRS = (0x20, 0x24, 0x40, 0x44)    # PICL/PICM, both boards
 WRITE_TYPES = (2, 4)        # 1 = READ, 2 = WRITE, 3 = POLL, 4 = WRITE2
+# TLB's controller probe (FN_bDrvFindPicController, 0x10008ba0) is a type-4
+# [4, 3, addr, 0, 0x00] sent to 0x44, 0x46, 0x24, 0x26 in that order, so a
+# 0x24 board is pinged on 0x46 before its own address answers.  Command 0x00
+# is that ping and nothing more; the erase commands are 0x0C-0x0F.
+BOOTLOADER_PING = 0x00
+# How TLB puts a running PIC into its bootloader (FN_bPicToBootLoaderState,
+# 0x1001b9b0, reached only from the firmware updater FN_bUpdate): a WRITE of
+# reg 0x0A = [00 55] to the application address, then a type-4 command 0x01
+# (0x0D on a 0x24 PICM).  Neither appears in any recorded scanning session.
+BOOTLOADER_ENTRY_REG = 0x0A
+BOOTLOADER_ENTRY_CMDS = (0x01, 0x0D)
 
 # The controller pair is PROBED by TLB at start-up and differs per board
 # (0x24/0x20 on an F-135, 0x44/0x40 on another variant), so never assume it:
@@ -186,6 +197,7 @@ class Scanner:
         self.h = None
         self.lock = threading.RLock()
         self.blocked = []
+        self.pic_blocked = []
         self.clamped = []
         self.n = 0
         self.imgbuf = bytearray()
@@ -340,21 +352,35 @@ class Scanner:
             if dx is not None:
                 dx.ir_on = self.ir_on               # the override sizes the pitch by it
 
-    def watch_bootloader(self, p):
-        """Report -- do NOT block -- a write aimed at a PIC bootloader address.
+    def guard_bootloader(self, p):
+        """True if this packet could reflash a PIC; the caller must not send it.
 
-        That path can erase PIC flash, and it is reachable over this channel.
-        But TLB probes for its controller pair at start-up across exactly these
-        addresses, and we have no capture of our own showing whether it probes
-        with reads or writes.  Blocking would risk breaking discovery, which is
-        the first thing that happens, to defend against Kodak's own software
-        spontaneously reflashing Kodak's own hardware -- a threat that does not
-        exist here.  So this is instrumentation: if it ever fires, the trace
-        says so and we can decide with evidence instead of inference."""
-        if len(p) >= 5 and p[0] in WRITE_TYPES and p[2] in BOOTLOADER_ADDRS:
-            say(f"  ?? write to bootloader address 0x{p[2]:02x} reg 0x{p[4]:02x}"
-                f" -- passed through, but that path can erase PIC flash")
-        return False
+        Kodak's own software CAN reflash the PICs: TLB carries a firmware
+        updater (FN_bUpdate) that PSI invokes, and PSI asks to run it at every
+        start.  So three things are refused, none of which occurs in ordinary
+        scanning (checked against every command of four recorded sessions):
+          * the bootloader-entry key: a WRITE of reg 0x0A to PICL/PICM;
+          * the bootloader-entry command: type-4 0x01/0x0D to PICL/PICM;
+          * any WRITE, or any type-4 but the probe ping, to a bootloader address.
+        Reads, polls and the type-4 ping still pass, so controller discovery is
+        untouched.  Refusing entry means a chip is never left sitting in its
+        bootloader; the updater fails on the first packet with the flash intact."""
+        if len(p) < 5 or p[0] not in WRITE_TYPES:
+            return False
+        t, addr, reg = p[0], p[2], p[4]
+        why = None
+        if addr in BOOTLOADER_ADDRS and not (t == 4 and reg == BOOTLOADER_PING):
+            why = "write to a bootloader address"
+        elif addr in PIC_APPLICATION_ADDRS and t == 2 and reg == BOOTLOADER_ENTRY_REG:
+            why = "bootloader-entry key"
+        elif addr in PIC_APPLICATION_ADDRS and t == 4 and reg in BOOTLOADER_ENTRY_CMDS:
+            why = "bootloader-entry command"
+        if why is None:
+            return False
+        self.pic_blocked.append(bytes(p).hex())
+        say(f"  !! BLOCKED {why}: type {t} addr 0x{addr:02x} reg 0x{reg:02x}"
+            f" ({bytes(p).hex()}) -- that path can erase PIC flash")
+        return True
 
     def clamp_leds(self, p):
         """Type-2 WRITE of reg 0x81 sets LED current.  Packet layout is
@@ -375,7 +401,9 @@ class Scanner:
         pkt = bytearray(pkt)
         self.cap_write({"d": "cmd", "hex": bytes(pkt).hex()})
         original = bytes(pkt)
-        self.watch_bootloader(pkt)
+        if self.guard_bootloader(pkt):
+            self.cap_write({"d": "cmd_blocked", "hex": original.hex()})
+            return None             # the client sees a failed DeviceIoControl
         pkt = self.clamp_leds(pkt)
         if bytes(pkt) != original:
             self.cap_write({"d": "cmd_mod", "hex": bytes(pkt).hex()})
@@ -894,6 +922,8 @@ def main():
             say(f"LED clamps applied: {dev.clamped}")
         if dev.blocked:
             say(f"EEPROM writes BLOCKED: {dev.blocked}")
+        if dev.pic_blocked:
+            say(f"PIC flash paths BLOCKED: {dev.pic_blocked}")
         dev.close()
         say("device closed")
     return 0
@@ -961,11 +991,30 @@ def selftest():
     assert not A(EE_WRITE, 0, 0, 0)
     assert not A(EE_WRITE, 0xA4, 0x0000, 0)
 
-    # Writes to a PIC bootloader address are REPORTED, never blocked -- see
-    # watch_bootloader.  It must never claim to have stopped anything.
+    # PIC flash paths are REFUSED -- see guard_bootloader.  Everything TLB's
+    # controller discovery and ordinary scanning send must still pass.
+    d.pic_blocked = []
     for ba in BOOTLOADER_ADDRS:
-        assert not d.watch_bootloader(bytearray([4, 3, ba, 0, 0x0C]))
-    assert not d.watch_bootloader(bytearray([1, 3, ba, 0, 0x02]))
+        assert d.guard_bootloader(bytearray([4, 3, ba, 0, 0x0C]))      # row erase
+        assert d.guard_bootloader(bytearray([2, 4, ba, 1, 0x02, 0]))   # any WRITE
+        assert not d.guard_bootloader(bytearray([4, 3, ba, 0, 0x00]))  # probe ping
+        assert not d.guard_bootloader(bytearray([1, 3, ba, 1, 0x02]))  # READ
+        assert not d.guard_bootloader(bytearray([3, 3, ba]))           # POLL
+    for app in PIC_APPLICATION_ADDRS:
+        assert d.guard_bootloader(bytearray([2, 5, app, 2, 0x0A, 0x00, 0x55]))
+        assert d.guard_bootloader(bytearray([4, 3, app, 0, 0x01]))
+        assert d.guard_bootloader(bytearray([4, 3, app, 0, 0x0D]))
+        assert not d.guard_bootloader(bytearray([4, 3, app, 0, 0x00]))  # probe ping
+    # The type-4 commands and WRITEs a real scan sends (from recorded sessions).
+    for p in ([4, 3, 0x40, 0, 0x8A], [4, 3, 0x44, 0, 0xA0], [4, 3, 0x44, 0, 0xA5],
+              [4, 3, 0x40, 0, 0x92], [2, 3, 0x44, 1, 0xA2], [2, 3, 0x40, 1, 0x80, 1],
+              [2, 3, 0x10, 1, 0x8F, 0], [2, 3, 0x40, 1, 0x06, 0]):
+        assert not d.guard_bootloader(bytearray(p)), bytes(p).hex()
+    # And a refused packet never reaches the device: there is none here, so
+    # anything that got past the guard would fail on the missing handle.
+    d.capture, d.h = None, None
+    assert d.cmd(bytes([2, 5, 0x44, 2, 0x0A, 0x00, 0x55]), 0) is None
+    assert d.pic_blocked
 
     # ppb must never latch the operational pair onto a bootloader address, or
     # lamp-off and motor-stop end up addressing nothing.
@@ -997,11 +1046,30 @@ def selftest():
     assert not A(EE_WRITE, 0, 0, 0)
     assert not A(EE_WRITE, 0xA4, 0x0000, 0)
 
-    # Writes to a PIC bootloader address are REPORTED, never blocked -- see
-    # watch_bootloader.  It must never claim to have stopped anything.
+    # PIC flash paths are REFUSED -- see guard_bootloader.  Everything TLB's
+    # controller discovery and ordinary scanning send must still pass.
+    d.pic_blocked = []
     for ba in BOOTLOADER_ADDRS:
-        assert not d.watch_bootloader(bytearray([4, 3, ba, 0, 0x0C]))
-    assert not d.watch_bootloader(bytearray([1, 3, ba, 0, 0x02]))
+        assert d.guard_bootloader(bytearray([4, 3, ba, 0, 0x0C]))      # row erase
+        assert d.guard_bootloader(bytearray([2, 4, ba, 1, 0x02, 0]))   # any WRITE
+        assert not d.guard_bootloader(bytearray([4, 3, ba, 0, 0x00]))  # probe ping
+        assert not d.guard_bootloader(bytearray([1, 3, ba, 1, 0x02]))  # READ
+        assert not d.guard_bootloader(bytearray([3, 3, ba]))           # POLL
+    for app in PIC_APPLICATION_ADDRS:
+        assert d.guard_bootloader(bytearray([2, 5, app, 2, 0x0A, 0x00, 0x55]))
+        assert d.guard_bootloader(bytearray([4, 3, app, 0, 0x01]))
+        assert d.guard_bootloader(bytearray([4, 3, app, 0, 0x0D]))
+        assert not d.guard_bootloader(bytearray([4, 3, app, 0, 0x00]))  # probe ping
+    # The type-4 commands and WRITEs a real scan sends (from recorded sessions).
+    for p in ([4, 3, 0x40, 0, 0x8A], [4, 3, 0x44, 0, 0xA0], [4, 3, 0x44, 0, 0xA5],
+              [4, 3, 0x40, 0, 0x92], [2, 3, 0x44, 1, 0xA2], [2, 3, 0x40, 1, 0x80, 1],
+              [2, 3, 0x10, 1, 0x8F, 0], [2, 3, 0x40, 1, 0x06, 0]):
+        assert not d.guard_bootloader(bytearray(p)), bytes(p).hex()
+    # And a refused packet never reaches the device: there is none here, so
+    # anything that got past the guard would fail on the missing handle.
+    d.capture, d.h = None, None
+    assert d.cmd(bytes([2, 5, 0x44, 2, 0x0A, 0x00, 0x55]), 0) is None
+    assert d.pic_blocked
 
     # ppb must never latch the operational pair onto a bootloader address, or
     # lamp-off and motor-stop end up addressing nothing.
