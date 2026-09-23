@@ -82,6 +82,18 @@ Then power on the scanner and run `./run.sh`.
 Re-running `install` is safe. Nothing goes on your `PATH`; nothing of this
 project's is installed system-wide.
 
+#### Starting it without the Terminal
+
+```sh
+./run.sh make-app
+```
+
+builds **Pakon Scanner.app** in `~/Applications` (pass another folder to put it
+elsewhere). Double-click it or keep it in the Dock: it does what `./run.sh`
+does, shows a dialog if the scanner is off, and stops the USB server when you
+close the client. Its output goes to `~/Library/Logs/Pakon Scanner.log`. The
+app remembers where this repo is, so run `make-app` again if you move it.
+
 **Requirements:** macOS on Apple Silicon or Intel · Python 3.10+ · a real USB
 cable · your own copy of the OEM software and `Pakon7.hex`.
 
@@ -147,7 +159,8 @@ The tool only ever reads. Nothing in this project writes the EEPROM.
 
 1. **Power on the scanner first.** Firmware lives in RAM and is uploaded at every
    power cycle.
-2. `./run.sh` and wait for the client window. It opens behind the terminal.
+2. `./run.sh` (or the Pakon Scanner app) and wait for the client window. It
+   opens behind the terminal.
 3. **First time only:** *Scan → Light Correction*, gate **empty**. This measures
    your unit. Skip it and the lamp produces nothing usable.
 4. Pick a resolution. Base 16 is 3000×2000.
