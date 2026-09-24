@@ -14,7 +14,8 @@
 #                           of the TLX client, from its own prefix (docs/PSI.md)
 #         ./run.sh install-psi [--from <dir>]   install PSI into that prefix
 #         ./run.sh doctor   check prerequisites; --install to fix them
-#         ./run.sh make-app [dir]   build a double-clickable "Pakon Scanner.app"
+#         ./run.sh make-app [--psi] [dir]   build a double-clickable "Pakon Scanner.app"
+#                           (or, with --psi, "Pakon PSI.app")
 #                           (default ~/Applications) that does all of this
 #         ./run.sh import-reg <file.reg>   import a .reg using a macOS path
 #         ./run.sh stop     stop both
@@ -152,18 +153,30 @@ make-app)
     # A double-clickable "Pakon Scanner.app" that runs this script with no
     # Terminal, shows problems as dialogs, and stops the server when the client
     # closes.  It remembers where this repo is, so re-run this if you move it.
-    dest="${2:-$HOME/Applications}"
-    app="$dest/Pakon Scanner.app"
+    # --psi builds "Pakon PSI.app" from the same script, launching PSI instead.
+    shift
+    kind=tlx; dest=""
+    for a in "$@"; do
+        case "$a" in --psi) kind=psi ;; *) dest="$a" ;; esac
+    done
+    dest="${dest:-$HOME/Applications}"
+    if [ "$kind" = psi ]; then name="Pakon PSI"; else name="Pakon Scanner"; fi
+    app="$dest/$name.app"
     command -v osacompile >/dev/null || { echo "osacompile not found"; exit 1; }
     mkdir -p "$dest" || exit 1
     rm -rf "$app"
     # -s: stay open, so it can notice the client window closing.
     osacompile -s -o "$app" "$HERE/setup/launcher.applescript" || exit 1
     printf '%s' "$HERE" > "$app/Contents/Resources/repo-path"
-    # osacompile ad-hoc signs the bundle; re-sign after adding repo-path.
+    printf '%s' "$kind" > "$app/Contents/Resources/client"
+    # osacompile ad-hoc signs the bundle; re-sign after adding those files.
     codesign --force --sign - "$app" >/dev/null 2>&1 || true
     echo "built: $app"
-    echo "Double-click it (or drag it to the Dock) instead of running ./run.sh."
+    if [ "$kind" = psi ]; then
+        echo "Double-click it (or drag it to the Dock) instead of running ./run.sh psi."
+    else
+        echo "Double-click it (or drag it to the Dock) instead of running ./run.sh."
+    fi
     exit 0
     ;;
 stop)

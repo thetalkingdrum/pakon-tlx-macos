@@ -93,6 +93,8 @@ elsewhere). Double-click it or keep it in the Dock: it does what `./run.sh`
 does, shows a dialog if the scanner is off, and stops the USB server when you
 close the client. Its output goes to `~/Library/Logs/Pakon Scanner.log`. The
 app remembers where this repo is, so run `make-app` again if you move it.
+`./run.sh make-app --psi` builds **Pakon PSI.app** the same way, for
+[Kodak's PSI](docs/PSI.md).
 
 **Requirements:** macOS on Apple Silicon or Intel · Python 3.10+ · a real USB
 cable · your own copy of the OEM software and `Pakon7.hex`.
