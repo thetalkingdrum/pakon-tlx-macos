@@ -284,7 +284,14 @@ All of this is the OEM software's behaviour, not this project's.
 ./run.sh stop             # stop both
 ./run.sh doctor           # check everything, including the USB bus
 ./run.sh doctor --install # install missing prerequisites
+./run.sh install-psi      # Kodak's full PSI application, in its own prefix
+./run.sh psi              # the bridge, then PSI instead of the TLX client
 ```
+
+**PSI.** Kodak's full scanning application runs on the same bridge, with Juan
+Cruz Lehmann's Windows 11 patches (full 3000 × 2000 frames, Positive mode,
+RAW16 export). It needs Jet and Microsoft's ODBC manager, which `install-psi`
+fetches and checks by hash. See [docs/PSI.md](docs/PSI.md).
 
 | variable | meaning |
 |---|---|
@@ -292,6 +299,7 @@ All of this is the OEM software's behaviour, not this project's.
 | `PAKON_WINE` | path to the wine binary |
 | `PAKON_INSTALL` | the OEM install directory |
 | `PSIX_FIRMWARE_DIR` | where your `Pakon7.hex` lives |
+| `PAKON_PSI_PREFIX` | the Wine prefix for PSI (default `~/.wine-psi`) |
 | `PAKON_CAPTURE` | path for a JSON-lines capture of every command and reply (see below) |
 | `PAKON_CAPTURE_LABEL` | a label recorded in the capture's first line |
 | `PAKON_ERRHOOK=1` | hook TLB's internal error reporter (patches OEM code in memory) |

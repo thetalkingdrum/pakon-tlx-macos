@@ -10,6 +10,9 @@
 # Usage:  ./run.sh          start server (if needed) and the client
 #         ./run.sh install  ONE COMMAND: prerequisites, OEM stack, firmware,
 #                           build, patch, registry -- everything but the scanner
+#         ./run.sh psi      the same, but Kodak's full PSI application instead
+#                           of the TLX client, from its own prefix (docs/PSI.md)
+#         ./run.sh install-psi [--from <dir>]   install PSI into that prefix
 #         ./run.sh doctor   check prerequisites; --install to fix them
 #         ./run.sh import-reg <file.reg>   import a .reg using a macOS path
 #         ./run.sh stop     stop both
@@ -17,6 +20,14 @@
 #         ./run.sh trace    decoded live view of the hardware conversation
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# PSI gets a prefix of its own (it needs Jet, and a native ODBC manager), so
+# choose it before anything below uses WINEPREFIX.
+CLIENT=tlx
+case "${1:-}" in
+psi|install-psi)
+    CLIENT=psi
+    export WINEPREFIX="${PAKON_PSI_PREFIX:-$HOME/.wine-psi}" ;;
+esac
 export WINEPREFIX="${WINEPREFIX:-$HOME/.wine}"
 export WINEDEBUG="${WINEDEBUG:-+debugstr}"
 export MVK_CONFIG_LOG_LEVEL=0
@@ -36,6 +47,16 @@ SRVLOG="${PAKON_SRVLOG:-/tmp/pakonusb.log}"
 #PAKON_SRVLOG_DIR="$HOME/.local/share/psix/logs"
 SRVLOG_DIR="${PAKON_SRVLOG_DIR:-}"
 CLILOG="${PAKON_CLILOG:-/tmp/tlxclient.log}"
+if [ "$CLIENT" = psi ]; then
+    CLILOG="${PAKON_CLILOG:-/tmp/psiclient.log}"
+    CLIENT_DIR="$WINEPREFIX/drive_c/Program Files/Pakon/PSI"
+    CLIENT_EXE=PSI.exe
+    CLIENT_NAME=PSI
+else
+    CLIENT_DIR="$APP"
+    CLIENT_EXE=TLXClientDemo.exe
+    CLIENT_NAME="TLX Client"
+fi
 
 # A repo-local .venv is used if it has the libusb1 binding; PYTHON overrides.
 PYTHON="$("$HERE/setup/bootstrap.sh" --python || echo python3)"
@@ -95,6 +116,12 @@ install)
     echo "First run on a fresh prefix: Scan -> Light Correction, gate EMPTY."
     exit 0
     ;;
+install-psi)
+    shift
+    exec "$HERE/setup/psi-install.sh" "$@"
+    ;;
+psi)
+    ;;                              # the start path below, with CLIENT=psi
 import-reg)
     # Import a .reg file given an ORDINARY macOS path.  Wine addresses the mac
     # filesystem as drive Z:, so the path has to be translated and the
@@ -121,6 +148,7 @@ doctor)
     ;;
 stop)
     pkill -f TLXClientDemo 2>/dev/null
+    pkill -f 'PSI\.exe' 2>/dev/null
     pkill -f pakonusb.py 2>/dev/null
     echo "stopped"
     exit 0
@@ -178,15 +206,21 @@ fi
 # Missing OEM stack?  Install it, rather than telling the user to go and read a
 # diagnostic.  This is the same work './run.sh install' does and every step of it
 # is idempotent, so it is safe to reach from the start path.
-if [ ! -f "$APP/TLXClientDemo.exe" ]; then
-    echo "No OEM client at: $APP"
-    echo "Installing it now -- same thing as './run.sh install'."
+if [ ! -f "$CLIENT_DIR/$CLIENT_EXE" ]; then
+    echo "No $CLIENT_NAME at: $CLIENT_DIR"
+    if [ "$CLIENT" = psi ]; then
+        echo "Installing it now -- same thing as './run.sh install-psi'."
+        echo
+        "$HERE/setup/psi-install.sh" || { echo; echo "install failed; nothing was started."; exit 1; }
+    else
+        echo "Installing it now -- same thing as './run.sh install'."
+        echo
+        "$0" install || { echo; echo "install failed; nothing was started."; exit 1; }
+    fi
     echo
-    "$0" install || { echo; echo "install failed; nothing was started."; exit 1; }
-    echo
-    if [ ! -f "$APP/TLXClientDemo.exe" ]; then
+    if [ ! -f "$CLIENT_DIR/$CLIENT_EXE" ]; then
         echo "install finished but there is still no client at:"
-        echo "  $APP"
+        echo "  $CLIENT_DIR"
         echo "If your stack lives elsewhere, set PAKON_INSTALL to point at it."
         exit 1
     fi
@@ -281,10 +315,11 @@ fi
 
 # 2. the client, from the path the OEM installer would have used, because
 #    TLB.dll and PakonImau resolve Config/, Logs/ and the Ansel data from it.
-pkill -f TLXClientDemo 2>/dev/null; sleep 1
-cd "$APP" || exit 1
-nohup "$WINE" TLXClientDemo.exe > "$CLILOG" 2>&1 < /dev/null &
+# Never two clients on one scanner: both would drive it through the same server.
+pkill -f TLXClientDemo 2>/dev/null; pkill -f 'PSI\.exe' 2>/dev/null; sleep 1
+cd "$CLIENT_DIR" || exit 1
+nohup "$WINE" "$CLIENT_EXE" > "$CLILOG" 2>&1 < /dev/null &
 disown
-echo "TLX Client launching (log: $CLILOG)"
+echo "$CLIENT_NAME launching (log: $CLILOG)"
 echo "Its window opens behind the terminal: bring it forward from the Dock."
 echo "run './run.sh log' to see what it is doing, './run.sh stop' to stop."
