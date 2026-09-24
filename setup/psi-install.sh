@@ -63,7 +63,9 @@ q() { MVK_CONFIG_LOG_LEVEL=0 WINEDEBUG=-all "$@"; }         # a quiet wine
 win() { printf 'Z:%s' "$1" | tr '/' '\\'; }                 # mac path -> Wine
 sha() { shasum -a 256 "$1" | cut -c1-64; }
 md5of() { md5 -q "$1" 2>/dev/null || md5sum "$1" | cut -c1-32; }
-flush() { [ -n "$WS" ] && q "$WS" -k >/dev/null 2>&1; sleep 1; return 0; }
+# wineserver -k fails when no wineserver is running, which is fine -- but as
+# the last command of an && list it would end the whole script under set -e.
+flush() { if [ -n "$WS" ]; then q "$WS" -k >/dev/null 2>&1 || true; fi; sleep 1; }
 
 fetch() {                       # fetch <url> <sha256> <name>  -> prints the path
     local url="$1" want="$2" out="$DL/$3"
